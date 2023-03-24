@@ -1,0 +1,82 @@
+/*
+* THIS FILE IS FOR IP TEST
+*/
+// system support
+#include "sysInclude.h"
+
+extern void ip_DiscardPkt(char* pBuffer,int type);
+
+extern void ip_SendtoLower(char*pBuffer,int length);
+
+extern void ip_SendtoUp(char *pBuffer,int length);
+
+extern unsigned int getIpv4Address();
+
+// implemented by students
+
+unsigned short check_sum(char* buffer)
+{
+	unsigned int checkSum = 0;
+	for (int i = 0; i < 10; i++)     // 将头部数据的每16比特加在一起
+	{
+		checkSum += ((unsigned short*)buffer)[i];
+	}
+	checkSum = (checkSum >> 16) + (checkSum & 0xFFFF); //进位反卷加回去
+	checkSum = ~checkSum;           // 取反
+	return checkSum;
+}
+
+int stud_ip_recv(char *pBuffer,unsigned short length)
+{
+	unsigned char version = pBuffer[0] >> 4;
+	if (version != 4)        //提取版本号判断值是否为4
+	{
+		ip_DiscardPkt(pBuffer, STUD_IP_TEST_VERSION_ERROR);
+		return 1;
+	}
+	unsigned char headLen = pBuffer[0] & 0xF;
+	if (headLen < 5)        //提取头部长判断长度是否小于5
+	{
+		ip_DiscardPkt(pBuffer, STUD_IP_TEST_HEADLEN_ERROR);
+		return 1;
+	}
+	unsigned char ttl = pBuffer[8];
+	if (ttl == 0)           //提取如果TTL等于0，出错
+	{
+		ip_DiscardPkt(pBuffer, STUD_IP_TEST_TTL_ERROR);
+		return 1;
+	}
+	if (check_sum(pBuffer)) // 如果校验和计算函数返回值不为0，出错
+	{
+		ip_DiscardPkt(pBuffer, STUD_IP_TEST_CHECKSUM_ERROR);
+		return 1;	
+	}
+	unsigned int dstAddr = ntohl(((unsigned int*)pBuffer)[4]);
+	if(dstAddr != getIpv4Address())
+	{
+		ip_DiscardPkt(pBuffer, STUD_IP_TEST_DESTINATION_ERROR);
+		return 1;
+	}
+	ip_SendtoUp(pBuffer, length);
+	return 0;
+}
+
+int stud_ip_Upsend(char *pBuffer, unsigned short len, unsigned int srcAddr, unsigned int dstAddr, byte protocol, byte ttl)
+{
+	srand(time(NULL));
+	int length = len + 20; //加上头部20个字节
+	char* buffer = new char[length];
+	memset(buffer, 0, length);
+	buffer[0] = 0x45;
+	((unsigned short*)buffer)[1] = htons(length);
+	((unsigned short*)buffer)[2] = htons(rand());
+	buffer[8] = ttl;
+	buffer[9] = protocol;
+	((unsigned int*)buffer)[3] = htonl(srcAddr);
+	((unsigned int*)buffer)[4] = htonl(dstAddr);
+	((unsigned short*)buffer)[5] = check_sum(buffer);
+	memcpy(buffer + 20, pBuffer, len);
+	ip_SendtoLower(buffer, length);
+	delete[] buffer;
+	return 0;
+}

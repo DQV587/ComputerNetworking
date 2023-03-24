@@ -1,0 +1,126 @@
+#include "sysInclude.h"
+#include <vector>
+using namespace std;
+
+// system support
+extern void fwd_LocalRcv(char *pBuffer, int length);
+
+extern void fwd_SendtoLower(char *pBuffer, int length, unsigned int nexthop);
+
+extern void fwd_DiscardPkt(char *pBuffer, int type);
+
+extern unsigned int getIpv4Address();
+
+// implemented by students
+
+struct Route              //路由项
+{
+	unsigned int mask;	  // 掩码
+	unsigned int dest;	  // 目的地址
+	unsigned int masklen; // 掩码长
+	unsigned int nexthop; // 下一跳IP地址
+	Route(unsigned int dest, unsigned int masklen, unsigned int nexthop  )// 初始化
+	{
+		this->dest = ntohl(dest);
+		this->masklen = ntohl(masklen);
+		this->nexthop = ntohl(nexthop);
+		this->mask = 0;
+		if (this->masklen) // 利用掩码长计算掩码
+		{
+			this->mask = (int)0x80000000 >> (this->masklen - 1);
+		}
+	}
+};
+
+vector<Route> routeTable; // 路由表
+
+bool find_route(unsigned int dstAddr, unsigned int* nexthop)
+{
+	int size = routeTable.size();
+	int i;
+	for (i = 0; i < size; i++)    // 从前向后找
+	{
+		Route route = routeTable[i];   
+		if ((route.mask & dstAddr) == route.dest)  // 如果找到第一个符合要求的路由项返回true
+		{
+			*nexthop = route.nexthop;
+			return true;
+		}
+	}
+	if (i == size)
+	{
+		return false;
+	}
+}
+
+unsigned short check_sum(char* buffer)
+{
+	unsigned int checkSum = 0;
+	for (int i = 0; i < 10; i++)
+	{
+		checkSum += ((unsigned short*)buffer)[i];
+	}
+	checkSum = (checkSum >> 16) + (checkSum & 0xFFFF);
+	checkSum = ~checkSum;
+	return checkSum;
+}
+
+void stud_Route_Init()			
+{
+	routeTable.clear();
+}
+
+void stud_route_add(stud_route_msg *proute)
+{
+	int size = routeTable.size();
+	int i;
+	Route route(proute->dest, proute->masklen, proute->nexthop);    // 构造要添加的路由项A
+	for (i = 0; i < size; i++)     // 查找第一个掩码长度不大于路由项A的路由项B
+	{
+		if (routeTable[i].masklen <= route.masklen)// 如果找到了这样的路由项B则将路由项A插在B前
+		{
+			routeTable.insert(routeTable.begin() + i, route);
+			break;
+		}
+	}
+	if (i == size)               // 如果没找到这样的路由项B
+	{
+		routeTable.push_back(route);    // 将路由项A放入列表最后
+	}
+}
+
+int stud_fwd_deal(char *pBuffer, int length)
+{
+	unsigned char ttl = pBuffer[8];
+	if(ttl == 0)
+	{
+		fwd_DiscardPkt(pBuffer, STUD_FORWARD_TEST_TTLERROR);
+		return 1;
+	}
+	unsigned int dstAddr = ntohl(((unsigned int*)pBuffer)[4]);
+	//向上层协议上交目的地址为本机地址的分组；
+	if(dstAddr == getIpv4Address())
+	{
+		fwd_LocalRcv(pBuffer, length);
+		return 0;
+	}
+	unsigned int* nexthop = new unsigned int;
+	//向相应接口转发不是本机接收的分组。
+	if(find_route(dstAddr, nexthop))
+	{
+		pBuffer[8]--;
+		((unsigned short*)pBuffer)[5] = 0;
+		//重新计算checksum
+		((unsigned short*)pBuffer)[5] = check_sum(pBuffer);
+		fwd_SendtoLower(pBuffer, length, *nexthop);
+		delete nexthop;
+		return 0;
+	}
+	//丢弃查不到路由的分组
+	else
+	{
+		fwd_DiscardPkt(pBuffer, STUD_FORWARD_TEST_NOROUTE);
+		delete nexthop;
+		return 1;
+	}
+}
